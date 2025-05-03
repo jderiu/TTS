@@ -1,5 +1,5 @@
-import os
-
+import os, json, random
+from torch.nn import Embedding, Linear
 from trainer import Trainer, TrainerArgs
 
 from TTS.config.shared_configs import BaseDatasetConfig
@@ -7,39 +7,67 @@ from TTS.tts.datasets import load_tts_samples
 from TTS.tts.layers.xtts.trainer.gpt_trainer import GPTArgs, GPTTrainer, GPTTrainerConfig, XttsAudioConfig
 from TTS.utils.manage import ModelManager
 from TTS.utils.alt_loggers import WandbLogger
+
+random.seed(240753)
+
+LANG_MAP = {
+    'ch_be': 'Bern',
+    'ch_bs': 'Basel',
+    'ch_gr': 'Graubünden',
+    'ch_in': 'Innerschweiz',
+    'ch_os': 'Ostschweiz',
+    'ch_vs': 'Wallis',
+    'ch_zh': 'Zürich',
+}
+LANG_MAP_INV = {v:k for k,v in LANG_MAP.items()}
+
 # Logging parameters
 RUN_NAME = "GPT_XTTS_v2.0_LJSpeech_FT"
-PROJECT_NAME = "XTTS_trainer"
+PROJECT_NAME = "SRG_XTTS_trainer"
 DASHBOARD_LOGGER = "wandb"
 LOGGER_URI = None
 
 # Set here the path that the checkpoints will be saved. Default: ./run/training/
-#OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run", "training")
-OUT_PATH = "/cluster/data/deri/TTS/TTS_dante/trained"
+# OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run", "training")
+OUT_PATH = "C:/Users/Jan Deriu/Documents/cluster/data/deri/TTS/TTS_CH_SRF/trained"
 
 # Training Parameters
 OPTIMIZER_WD_ONLY_ON_WEIGHTS = True  # for multi-gpu training please make it False
 START_WITH_EVAL = True  # if True it will star with evaluation
-BATCH_SIZE = 3  # set here the batch size
-GRAD_ACUMM_STEPS = 84  # set here the grad accumulation steps
+BATCH_SIZE = 4  # set here the batch size
+GRAD_ACUMM_STEPS = 12  # set here the grad accumulation steps
 # Note: we recommend that BATCH_SIZE * GRAD_ACUMM_STEPS need to be at least 252 for more efficient training. You can increase/decrease BATCH_SIZE but then set GRAD_ACUMM_STEPS accordingly.
 
-# Define here the dataset that you want to use for the fine-tuning on.
+BASE_DATASET_PATH = "/cluster/data/deri/snf_tts/speakers"
+with open(os.path.join('/cluster/data/deri/snf_tts/', "speaker_to_dialect.json"), 'rt', encoding='utf-8') as fp:
+    speaker_to_dialect = json.load(fp)
+
+
 config_dataset = BaseDatasetConfig(
     formatter="ljspeech", #create custom formatter with speaker name
-    dataset_name="dante",
-    path="/cluster/data/deri/dante_dataset",
+    dataset_name="srg",
+    path="/cluster/data/deri/srf_train",
     meta_file_train="metadata.txt",
-    language="it", #create dial_id
+    language="ch_gr", #create dial_id
 )
 
-# Add here the configs of the datasets
 DATASETS_CONFIG_LIST = [config_dataset]
+
+# Define here the dataset that you want to use for the fine-tuning on.
+# config_dataset = BaseDatasetConfig(
+#     formatter="ljspeech_custom_speaker",  # create custom formatter with speaker name
+#     dataset_name="dante",
+#     path="/cluster/data/deri/dante_dataset",
+#     meta_file_train="metadata.txt",
+#     language="it",  # create dial_id
+# )
+
+# Add here the configs of the datasets
+# DATASETS_CONFIG_LIST = [config_dataset]
 
 # Define the path where XTTS v2.0.1 files will be downloaded
 CHECKPOINTS_OUT_PATH = os.path.join(OUT_PATH, "XTTS_v2.0_original_model_files/")
 os.makedirs(CHECKPOINTS_OUT_PATH, exist_ok=True)
-
 
 # DVAE files
 DVAE_CHECKPOINT_LINK = "https://coqui.gateway.scarf.sh/hf-coqui/XTTS-v2/main/dvae.pth"
@@ -54,15 +82,17 @@ if not os.path.isfile(DVAE_CHECKPOINT) or not os.path.isfile(MEL_NORM_FILE):
     print(" > Downloading DVAE files!")
     ModelManager._download_model_files([MEL_NORM_LINK, DVAE_CHECKPOINT_LINK], CHECKPOINTS_OUT_PATH, progress_bar=True)
 
-
 # Download XTTS v2.0 checkpoint if needed
 TOKENIZER_FILE_LINK = "https://coqui.gateway.scarf.sh/hf-coqui/XTTS-v2/main/vocab.json"
 XTTS_CHECKPOINT_LINK = "https://coqui.gateway.scarf.sh/hf-coqui/XTTS-v2/main/model.pth"
 
 # XTTS transfer learning parameters: You we need to provide the paths of XTTS model checkpoint that you want to do the fine tuning.
 TOKENIZER_FILE = os.path.join(CHECKPOINTS_OUT_PATH, os.path.basename(TOKENIZER_FILE_LINK))  # vocab.json file
+TOKENIZER_FILE = "/cluster/data/deri/TTS/TTS_CH/trained/GPT_XTTS_v2.0_Full_7_5/vocab.json"  # vocab.json file
 XTTS_CHECKPOINT = os.path.join(CHECKPOINTS_OUT_PATH, os.path.basename(XTTS_CHECKPOINT_LINK))  # model.pth file
-#XTTS_CHECKPOINT = "/work_space_data/TTS_dante/trained\GPT_XTTS_v2.0_LJSpeech_FT-September-18-2024_04+03PM-dbf1a08a/best_model_3825.pth"  # model.pth file
+XTTS_CHECKPOINT = "/cluster/data/deri/TTS/TTS_CH/trained/GPT_XTTS_v2.0_Full_7_5/best_model.pth"  # model.pth file
+
+XTTS_RELOAD = True
 
 # download XTTS v2.0 files if needed
 if not os.path.isfile(TOKENIZER_FILE) or not os.path.isfile(XTTS_CHECKPOINT):
@@ -71,13 +101,15 @@ if not os.path.isfile(TOKENIZER_FILE) or not os.path.isfile(XTTS_CHECKPOINT):
         [TOKENIZER_FILE_LINK, XTTS_CHECKPOINT_LINK], CHECKPOINTS_OUT_PATH, progress_bar=True
     )
 
-
 # Training sentences generations
 SPEAKER_REFERENCE = [
-    "/cluster/data/deri/dante_dataset/text_wavs/canto_2_terzina_30.wav"  # speaker reference to be used in training test sentences
+    "/cluster/data/deri/srf_train/test_wavs/tobias_delfine_mono_0.wav",
 ]
-LANGUAGE = config_dataset.language
 
+test_text1 = 'In einem Prozess zwischen den Viltersern und den Wangsern um die Alprechte im Valeis soll ein Vilterser im Melser Rathaus geschworen haben, er stehe auf Vilterserboden, so sicher als der Schöpfer über ihm sei.'
+test_text2 = 'Wenn man abgeschlossen hat, hat man jeweils geklopft mit einer Faust, ob nichts los sei. Ein alter Heiligkreuzer hat mir erzählt, sie hätten dort unten gebohrt. Damals hätte es plötzlich Kies geworfen.'
+test_text3 = 'Aber einer von ihnen müsse bei ihm bleiben. Er bleibe nicht allein. Das Los habe dann den Senn getroffen. Man sei von Alp gefahren.'
+test_text4 = 'Da zerriss dieser Haniggel mit einem Schranz die Ketten und mache den Überschlag, dass die Knechte um ihn herum wie Scheiter auseinander gespickt seien und schoss in den Schlosshof hinaus und über die Mauer hinunter,'
 
 def main():
     # init args and config
@@ -105,7 +137,6 @@ def main():
         model_args=model_args,
         run_name=RUN_NAME,
         project_name=PROJECT_NAME,
-        epochs=1000,
         run_description="""
             GPT XTTS training
             """,
@@ -128,48 +159,74 @@ def main():
         wandb_entity='deri',
         # target_loss="loss",
         print_eval=False,
+        run_eval_steps=2500,
         datasets=DATASETS_CONFIG_LIST,
         shuffle=True,
         # Optimizer values like tortoise, pytorch implementation with modifications to not apply WD to non-weight parameters.
         optimizer="AdamW",
         optimizer_wd_only_on_weights=OPTIMIZER_WD_ONLY_ON_WEIGHTS,
         optimizer_params={"betas": [0.9, 0.96], "eps": 1e-8, "weight_decay": 1e-2},
-        lr=6e-05,  # learning rate
+        lr=5e-06,  # learning rate
         lr_scheduler="MultiStepLR",
         # it was adjusted accordly for the new step scheme
         lr_scheduler_params={"milestones": [50000 * 18, 150000 * 18, 300000 * 18], "gamma": 0.5, "last_epoch": -1},
         use_h5=True,
         test_sentences=[
             {
-                "text": "Già era ‘l sole a l’orizzonte giunto  lo cui meridian cerchio coverchia  Ierusalèm col suo più alto punto;  ",
+                "text": test_text1,
                 "speaker_wav": SPEAKER_REFERENCE,
-                "language": LANGUAGE,
+                "language": 'ch_gr',
             },
             {
-                "text": "e la notte, che opposita a lui cerchia,  uscia di Gange fuor con le Bilance,  che le caggion di man quando soverchia;",
+                "text": test_text2,
                 "speaker_wav": SPEAKER_REFERENCE,
-                "language": LANGUAGE,
+                "language": 'ch_gr',
             },
             {
-                "text": "sì che le bianche e le vermiglie guance,  là dov’i’ era, de la bella Aurora  per troppa etate divenivan rance. ",
+                "text": test_text3,
                 "speaker_wav": SPEAKER_REFERENCE,
-                "language": LANGUAGE,
+                "language": 'ch_gr',
             },
             {
-                "text": "«Chi siete voi che contro al cieco fiume  fuggita avete la pregione etterna?», diss’el, movendo quelle oneste piume.",
+                "text": test_text4,
                 "speaker_wav": SPEAKER_REFERENCE,
-                "language": LANGUAGE,
-            },
-            {
-                "text": "così vid’io quella masnada fresca  lasciar lo canto, e fuggir ver’ la costa,  com’om che va, né sa dove riesca:   né la nostra partita fu men tosta.",
-                "speaker_wav": SPEAKER_REFERENCE,
-                "language": LANGUAGE,
-            },
+                "language": 'ch_gr',
+            }
         ],
     )
 
-    # init the model from config
-    model = GPTTrainer.init_from_config(config)
+    config.languages += list(LANG_MAP.keys())
+
+    if not XTTS_RELOAD:
+        model = GPTTrainer.init_from_config(config)
+
+        new_toks = ['[ch_be]', '[ch_bs]', '[ch_gr]', '[ch_in]', '[ch_os]', '[ch_vs]', '[ch_zh]']
+        model.xtts.tokenizer.tokenizer.add_special_tokens(
+            new_toks
+        )
+        new_ids = [model.xtts.tokenizer.tokenizer.encode(t).ids[0] for t in new_toks]
+
+        old_te = model.xtts.gpt.text_embedding
+        old_th = model.xtts.gpt.text_head
+        old_number_text_token = model.xtts.gpt.number_text_tokens
+
+        model_dim = old_te.weight.shape[-1]
+        number_text_tokens = model.xtts.tokenizer.get_number_tokens()
+        model.xtts.args.gpt_number_text_tokens = number_text_tokens
+
+        new_text_embedding = Embedding(number_text_tokens, model_dim)
+        new_text_head = Linear(model_dim, number_text_tokens)
+
+        model.xtts.gpt.text_embedding = new_text_embedding
+        model.xtts.gpt.text_head = new_text_head
+
+        for i in range(old_number_text_token):
+            new_text_embedding.weight.data[i] = old_te.weight.data[i]
+            new_text_head.weight.data[i] = old_th.weight.data[i]
+            new_text_head.bias.data[i] = old_th.bias.data[i]
+
+    else:
+        model = GPTTrainer.init_from_config(config)
 
     # load training samples
     train_samples, eval_samples = load_tts_samples(
@@ -182,7 +239,8 @@ def main():
     # init the trainer and 🚀
     trainer = Trainer(
         TrainerArgs(
-            restore_path=None,  # xtts checkpoint is restored via xtts_checkpoint key so no need of restore it using Trainer restore_path parameter
+            restore_path=None if not XTTS_RELOAD else XTTS_CHECKPOINT,
+            # xtts checkpoint is restored via xtts_checkpoint key so no need of restore it using Trainer restore_path parameter
             skip_train_epoch=False,
             start_with_eval=START_WITH_EVAL,
             grad_accum_steps=GRAD_ACUMM_STEPS,
@@ -194,11 +252,14 @@ def main():
         eval_samples=eval_samples,
     )
     trainer.dashboard_logger = WandbLogger(  # pylint: disable=abstract-class-instantiated
-            project=config.project_name,
-            name=config.run_name,
-            config=config,
-            entity=config.wandb_entity,
-        )
+        project=config.project_name,
+        name=config.run_name,
+        config=config,
+        entity=config.wandb_entity,
+    )
+    model.xtts.tokenizer.tokenizer.save(
+        path=os.path.join(trainer.output_path, 'vocab.json')
+    )
     trainer.fit()
 
 

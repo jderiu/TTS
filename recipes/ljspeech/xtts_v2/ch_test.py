@@ -1,8 +1,11 @@
-import random
+import argparse
 
-from pydub import AudioSegment
-import torch, os, csv
+import torch, os, json
 from TTS.api import TTS
+
+from tqdm import tqdm
+import pandas as pd
+
 
 LANG_MAP = {
     'ch_be': 'Bern',
@@ -12,59 +15,91 @@ LANG_MAP = {
     'ch_os': 'Ostschweiz',
     'ch_vs': 'Wallis',
     'ch_zh': 'Zürich',
+    'de': 'Deutsch',
 }
 LANG_MAP_INV = {v:k for k,v in LANG_MAP.items()}
 
-# Get device
-device = "cuda" if torch.cuda.is_available() else "cpu"
+def prepare_unique_sentences(test_sentence_fname, k=50):
+    unique_test_sentence_df = pd.read_csv(test_sentence_fname, sep='\t')
+    # remove all sample_ids that are in the randdf
+    if k > 0:
+        unique_test_sentence_df = unique_test_sentence_df.head(k)
+
+    return unique_test_sentence_df
 
 
-model_name = "GPT_XTTS_v2.0_LJSpeech_FT-October-26-2024_05+42PM-0000000"
+def main(config):
+    model_bpath = config["model_bpath"]
+    model_name = config["model_name"]
+    output_bpath = os.path.join(config["output_bpath"], model_name)
+    dataspeech_stats_path = config["dataspeech_stats_path"]
+    dataspeech_stats_fname = config["dataspeech_stats_fname"]
+    speaker_ref_path = config["speaker_ref_path"]
+    test_sentence_path = config["test_sentence_path"]
+    test_sentence_fname = config["test_sentnece_fname"]
+    n_samples = config["n_samples"]
 
-model_path = f"/cluster/data/deri/TTS/TTS_CH/trained/{model_name}/"
-config_path = f"/cluster/data/deri/TTS/TTS_CH/trained/{model_name}/config.json"
-# Init TTS
-tts = TTS(
-    model_path=model_path,
-    config_path=config_path,
-    progress_bar=True
-).to(device)
-# Run TTS
-# ❗ Since this model is multi-lingual voice cloning model, we must set the target speaker_wav and language
-# Text to speech list of amplitude values as output
-#wav = tts.tts(text="Hello world!", speaker_wav="my/cloning/audio.wav", language="en")
-# Text to speech to a file
+    # Constructing full paths
+    model_path = os.path.join(model_bpath, model_name)
+    config_path = os.path.join(model_bpath, model_name, 'config.json')
+    dataspeech_path = os.path.join(dataspeech_stats_path, dataspeech_stats_fname)
+    test_sentence_full_path = os.path.join(test_sentence_path, test_sentence_fname)
 
-all_texts = set()
-test_meta = '/02Datasets/02 Audio Processing/snf_test/test.tsv'
-with open(test_meta, 'rt', encoding='utf-8') as f:
-    next(f)
-    for line in f:
-        sline = line.split('\t')
-        text = sline[2]
-        all_texts.add(text)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    os.makedirs(output_bpath, exist_ok=True)
 
-all_texts = list(all_texts)
+    #laod randffile
+    randdf = pd.read_csv(dataspeech_path, sep='\t')
+    unique_test_sentence_df = prepare_unique_sentences(test_sentence_full_path, k=n_samples)
 
-texts = random.sample(all_texts, k=30)
+    unique_test_sentence_df.to_csv(os.path.join(output_bpath, 'unique_test_sentences.tsv'), sep='\t', index=False)
+    randdf.to_csv(os.path.join(output_bpath, 'randdf.tsv'), sep='\t', index=False)
 
-speaker_id = 'd2dee463-0eb9-47fa-b739-f1dccd8638f9'
+    # Init TTS
+    tts = TTS(
+        model_path=model_path,
+        config_path=config_path,
+        progress_bar=True
+    ).to(device)
 
-speaker_wavs = [
-    "/cluster/data/deri/snf_tts/text_wavs/d2dee463-0eb9-47fa-b739-f1dccd8638f9_0.wav",
-    "/cluster/data/deri/snf_tts/text_wavs/d2dee463-0eb9-47fa-b739-f1dccd8638f9_1.wav",
-    "/cluster/data/deri/snf_tts/text_wavs/d2dee463-0eb9-47fa-b739-f1dccd8638f9_2.wav",
+    unique_speakers = randdf['speaker_id'].unique()
+    for sid, speaker in enumerate(unique_speakers):
+        speaker_df = randdf[randdf['speaker_id'] == speaker]
+        sample_ids = speaker_df['sample_id'].tolist()
+        conditioning_paths = [os.path.join(speaker_ref_path, speaker, f"{audio}.wav") for audio in sample_ids]
+        opath_speaker = os.path.join(output_bpath, speaker)
+        for dial_tag in LANG_MAP.keys():
+            os.makedirs(os.path.join(opath_speaker, dial_tag), exist_ok=True)
 
-    # speaker reference to be used in training test sentences
-]
+        for idx, row in tqdm(
+                unique_test_sentence_df.iterrows(),
+                total=len(unique_test_sentence_df),
+                desc=f"Speaker {sid}/{len(unique_speakers)}: {speaker}"
+        ):
+            line = row['sentence']
+            if os.path.exists(os.path.join(opath_speaker, dial_tag, f'sent-{idx}.wav')):
+                print(f"Skipping {opath_speaker}-{dial_tag}-{idx}")
+                continue
+            for dial_tag in LANG_MAP.keys():
+                tts.tts_to_file(
+                    text=line,
+                    speaker_wav=conditioning_paths,
+                    language=dial_tag,
+                    split_sentences=False,
+                    file_path=os.path.join(opath_speaker, dial_tag, f'sent-{idx}.wav')
+                )
 
-#speaker_wavs = [os.path.join(speaker_wavs_base, speaker_id, x) for x in audios]
 
-dial_tags = list(LANG_MAP.keys())
-[os.makedirs(f'ch_test_n/{model_name}/{dial_tag}', exist_ok=True) for dial_tag in dial_tags]
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        prog='ProgramName',
+        description='What the program does',
+        epilog='Text at the bottom of help')
 
-for tid, text in enumerate(texts):
-    for dial_tag in dial_tags:
-        tts.tts_to_file(text=text, speaker_wav=speaker_wavs, language=dial_tag, file_path=f'ch_test_n/{model_name}/{dial_tag}/{tid}.wav')
+    parser.add_argument('-c', '--config', type=str, default='gen_config')
+    args = parser.parse_args()
 
+    with open(f'{args.config}.json', 'rt', encoding='utf-8') as f:
+        config = json.load(f)
 
+    main(config)
