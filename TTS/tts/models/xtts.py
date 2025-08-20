@@ -379,7 +379,7 @@ class Xtts(BaseTTS):
 
         return gpt_cond_latents, speaker_embedding
 
-    def synthesize(self, text, config, speaker_wav, language, speaker_id=None, **kwargs):
+    def synthesize(self, text, config, speaker_wav, language, speed: float = 1.0, speaker_id=None, **kwargs):
         """Synthesize speech with the given input text.
 
         Args:
@@ -405,6 +405,7 @@ class Xtts(BaseTTS):
             "repetition_penalty": config.repetition_penalty,
             "top_k": config.top_k,
             "top_p": config.top_p,
+            "speed": speed,
         }
         settings.update(kwargs)  # allow overriding of preset settings with kwargs
         if speaker_id is not None:
@@ -431,6 +432,7 @@ class Xtts(BaseTTS):
         top_k=50,
         top_p=0.85,
         do_sample=True,
+        speed=1.0,
         # Cloning
         gpt_cond_len=30,
         gpt_cond_chunk_len=6,
@@ -496,6 +498,7 @@ class Xtts(BaseTTS):
             top_k=top_k,
             top_p=top_p,
             do_sample=do_sample,
+            speed=speed,
             **hf_generate_kwargs,
         )
 

@@ -281,6 +281,7 @@ class TTS(nn.Module):
             reference_wav=None,
             style_wav=None,
             style_text=None,
+            speed=speed,
             reference_speaker_name=None,
             split_sentences=split_sentences,
             **kwargs,
@@ -337,6 +338,7 @@ class TTS(nn.Module):
             language=language,
             speaker_wav=speaker_wav,
             split_sentences=split_sentences,
+            speed=speed,
             **kwargs,
         )
         self.synthesizer.save_wav(wav=wav, path=file_path, pipe_out=pipe_out)
